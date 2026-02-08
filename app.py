@@ -109,6 +109,8 @@ if 'raw_ocr_text' not in st.session_state:
     st.session_state.raw_ocr_text = "" 
 if 'current_uploaded_file' not in st.session_state:
     st.session_state.current_uploaded_file = None # KEY: New state for persistent file object
+if 'manual_total' not in st.session_state:
+    st.session_state.manual_total = 0.0
 
 # ---------------------------------------------------------
 # 📘 Load Item Database 
@@ -610,47 +612,6 @@ def generate_ai_predictions(data):
 # ---------------------------------------------------------
 # 💻 Manual Input Helper Functions
 # ---------------------------------------------------------
-def calculate_item_totals():
-    if 'item_editor' not in st.session_state:
-        return
-        
-    # Recalculate based on the current data in the data editor state (which includes edits and additions)
-    # Note: st.data_editor data structure is complex, this helper tries to stabilize it by re-reading the full dataset
-    
-    # We must retrieve the current data list from the data editor output or the manual_items state
-    # Due to how st.data_editor handles state, we rely on the primary list structure.
-    # In a perfect world, we'd use the `data` key from the editor output, but accessing it requires a form submission 
-    # or a tricky state manipulation. Let's rely on the previous logic and ensure `manual_items` is the source of truth.
-    
-    # For simplicity and to avoid a complex chain of state updates, we rely on the `manual_items` state which should
-    # ideally be updated by the form submission or a separate, explicit update mechanism.
-    # In the current implementation, we'll ensure we use the data from the editor if possible.
-    
-    # A safer way to trigger a stable calculation is often a button press, but since the user wants on_change, 
-    # we proceed with the current structure.
-    
-    df_manual = pd.DataFrame(st.session_state.manual_items)
-
-    try:
-        # Check if the data editor's internal representation is available and use it
-        if 'data' in st.session_state['item_editor']:
-            df_final_data = pd.DataFrame(st.session_state['item_editor']['data'])
-        else:
-            df_final_data = df_manual
-    except:
-        df_final_data = df_manual
-
-    # Apply calculations
-    df_final_data['quantity'] = pd.to_numeric(df_final_data['quantity'], errors='coerce').fillna(0).astype(int)
-    df_final_data['unit_price'] = pd.to_numeric(df_final_data['unit_price'], errors='coerce').fillna(0.0)
-    
-    # Calculate total price
-    df_final_data['total_price'] = df_final_data['quantity'] * df_final_data['unit_price']
-
-    # Update session state for the next render
-    st.session_state.manual_items = df_final_data.to_dict('records')
-    # st.rerun() # Removed st.rerun() here as it can cause excessive reloads, letting the form submission handle final state
-
 
 # ---------------------------------------------------------
 # 📝 Manual Input Page Function
@@ -671,23 +632,39 @@ def manual_input_page():
 
     st.caption("Edit **Quantity** or **Unit Price (RM)** to automatically update the **Total Price (RM)**.")
 
-    st.data_editor(
-        df_manual,
+    # --- Editable Table ---
+    edited_items = st.data_editor(
+        st.session_state.manual_items,
         column_config={
             "item_name": st.column_config.TextColumn("Item Name", required=True),
             "quantity": st.column_config.NumberColumn("Quantity", min_value=1, format="%d"),
             "unit_price": st.column_config.NumberColumn("Unit Price (RM)", min_value=0.01, format="%.2f"),
-            "total_price": st.column_config.NumberColumn(
-                "Total Price (RM)", 
-                disabled=True,
-                format="%.2f"
-            ),
+            "total_price": st.column_config.NumberColumn("Total Price (RM)", disabled=True, format="%.2f"),
         },
-        num_rows="dynamic", 
+        num_rows="dynamic",
         use_container_width=True,
-        key="item_editor",
-        on_change=calculate_item_totals 
+        key="manual_editor"
     )
+
+    # --- AUTO-CALCULATE IMMEDIATELY HERE ---
+
+    # --- Initialise grand total in session state (first time only) ---
+    # Ensure manual_total exists
+    if "manual_total" not in st.session_state:
+        st.session_state.manual_total = 0.0
+
+    # --- REFRESH BUTTON (always visible) ---
+    if st.button("🔄 Refresh Totals"):
+        df = pd.DataFrame(edited_items)
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0).astype(int)
+        df["unit_price"] = pd.to_numeric(df["unit_price"], errors="coerce").fillna(0.0)
+        df["total_price"] = df["quantity"] * df["unit_price"]
+
+        st.session_state.manual_items = df.to_dict("records")
+        st.session_state.manual_total = float(df["total_price"].sum())
+        st.rerun()
+
+
 
     st.markdown("---")
     
@@ -712,10 +689,10 @@ def manual_input_page():
             "Grand Total (RM) - Adjust for Discounts/Taxes if needed", 
             min_value=0.00, 
             format="%.2f", 
-            # Use the calculated value from the editor state
-            value=current_calculated_grand_total, 
+            value=st.session_state.manual_total, 
             key="manual_total"
         )
+
 
         submitted = st.form_submit_button("💾 Save Receipt")
 
@@ -777,6 +754,7 @@ def manual_input_page():
                 
                 st.session_state.manual_items = [{'item_name': '', 'quantity': 1, 'unit_price': 0.0, 'total_price': 0.0}]
                 st.rerun()
+
 
 # ---------------------------------------------------------
 # 🏁 Main App 
